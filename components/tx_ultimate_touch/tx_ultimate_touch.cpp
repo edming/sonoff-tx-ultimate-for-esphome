@@ -1,204 +1,94 @@
 #include "esphome/core/log.h"
 #include "tx_ultimate_touch.h"
 
-namespace esphome
-{
-    namespace tx_ultimate_touch
-    {
-        static const char *TAG = "tx_ultimate_touch";
+namespace esphome {
+namespace tx_ultimate_touch {
 
-        void TxUltimateTouch::setup()
-        {
-            ESP_LOGI("log", "%s", "Tx Ultimate Touch is initialized");
-        }
+static const char *TAG = "tx_touch";
 
-        void TxUltimateTouch::loop()
-        {
-            bool found = false;
+void TxUltimateTouch::setup() {
+  ESP_LOGI(TAG, "TX Ultimate Touch ready");
+}
 
-            int bytes[15] = {};
-            int byte = -1;
-            int i = 0;
+void TxUltimateTouch::loop() {
+  int bytes[15] = {0};
+  int i = 0;
 
-            while (this->available())
-            {
-                byte = this->read();
-                if (byte == 170)
-                {
-                    handle_touch(bytes);
-                    i = 0;
-                }
+  while (this->available()) {
+    int b = this->read();
 
-                bytes[i] = byte;
+    if (i < 15)
+      bytes[i++] = b;
 
-                i++;
+    if (b == 170) {
+      handle_touch_(bytes);
+      i = 0;
+    }
+  }
+}
 
-                if (byte != 0)
-                {
-                    found = true;
-                }
-            };
+void TxUltimateTouch::handle_touch_(int bytes[]) {
+  if (!is_valid_data_(bytes))
+    return;
 
-            if (found)
-            {
-                handle_touch(bytes);
-            }
-        }
+  send_touch_(get_touch_point_(bytes));
+}
 
-        void TxUltimateTouch::handle_touch(int bytes[])
-        {
-            ESP_LOGV("UART-Log", "------------");
-            for (int i = 0; i < 15; i++)
-            {
-                ESP_LOGV("UART-Log", "%i", bytes[i]);
-            }
+bool TxUltimateTouch::is_valid_data_(int bytes[]) {
+  return (bytes[0] == 170 && bytes[1] == 85);
+}
 
-            if (is_valid_data(bytes))
-            {
-                send_touch_(get_touch_point(bytes));
-            }
-        }
+int TxUltimateTouch::get_touch_state_(int bytes[]) {
+  return bytes[4];
+}
 
-        void TxUltimateTouch::dump_config()
-        {
-            ESP_LOGCONFIG(TAG, "Tx Ultimate Touch");
-        }
+int TxUltimateTouch::get_x_(int bytes[]) {
+  return bytes[6];
+}
 
-        void TxUltimateTouch::send_touch_(TouchPoint tp)
-        {
-            switch (tp.state)
-            {
-            case TOUCH_STATE_RELEASE:
-                if (tp.x >= 17)
-                {
-                    tp.x = tp.x - 16;
-                    ESP_LOGD(TAG, "Long Press Release (x=%d)", tp.x);
-                    this->long_touch_release_trigger_.trigger(tp);
-                }
-                else
-                {
-                    ESP_LOGD(TAG, "Release (x=%d)", tp.x);
-                    this->release_trigger_.trigger(tp);
-                }
-                break;
+TouchPoint TxUltimateTouch::get_touch_point_(int bytes[]) {
+  TouchPoint tp;
+  tp.x = get_x_(bytes);
+  tp.state = get_touch_state_(bytes);
+  return tp;
+}
 
-            case TOUCH_STATE_PRESS:
-                ESP_LOGD(TAG, "Press (x=%d)", tp.x);
-                this->touch_trigger_.trigger(tp);
-                break;
+void TxUltimateTouch::send_touch_(TouchPoint tp) {
+  switch (tp.state) {
 
-            case TOUCH_STATE_SWIPE_LEFT:
-                ESP_LOGD(TAG, "Swipe Left (x=%d)", tp.x);
-                this->swipe_trigger_left_.trigger(tp);
-                break;
+    case 1:
+      ESP_LOGD(TAG, "RELEASE %d", tp.x);
+      this->release_trigger_.trigger(tp);
+      break;
 
-            case TOUCH_STATE_SWIPE_RIGHT:
-                ESP_LOGD(TAG, "Swipe Right (x=%d)", tp.x);
-                this->swipe_trigger_right_.trigger(tp);
-                break;
+    case 2:
+      ESP_LOGD(TAG, "PRESS %d", tp.x);
+      this->touch_trigger_.trigger(tp);
+      break;
 
-            case TOUCH_STATE_ALL_FIELDS:
-                ESP_LOGD(TAG, "Full Touch Release");
-                this->full_touch_release_trigger_.trigger(tp);
-                break;
+    case 12:
+      ESP_LOGD(TAG, "SWIPE RIGHT");
+      this->swipe_right_trigger_.trigger(tp);
+      break;
 
-            default:
-                break;
-            }
-        }
+    case 13:
+      ESP_LOGD(TAG, "SWIPE LEFT");
+      this->swipe_left_trigger_.trigger(tp);
+      break;
 
-        bool TxUltimateTouch::is_valid_data(int bytes[])
-        {
-            bool valid = true;
+    case 11:
+      ESP_LOGD(TAG, "FULL TOUCH");
+      this->full_touch_release_trigger_.trigger(tp);
+      break;
 
-            if (!(bytes[0] == 170 && bytes[1] == 85 && bytes[2] == 1 && bytes[3] == 2))
-            {
-                return false;
-            }
+    default:
+      break;
+  }
+}
 
-            int state = get_touch_state(bytes);
-            if (state != TOUCH_STATE_PRESS &&
-                state != TOUCH_STATE_RELEASE &&
-                state != TOUCH_STATE_SWIPE_LEFT &&
-                state != TOUCH_STATE_SWIPE_RIGHT &&
-                state != TOUCH_STATE_ALL_FIELDS)
-            {
-                return false;
-            }
+void TxUltimateTouch::dump_config() {
+  ESP_LOGCONFIG(TAG, "TX Ultimate Touch OK");
+}
 
-            if (bytes[6] < 0 && state != TOUCH_STATE_ALL_FIELDS)
-            {
-                return false;
-            }
-
-            return true;
-        }
-
-        int TxUltimateTouch::get_x_touch_position(int bytes[])
-        {
-            int state = bytes[4];
-            switch (state)
-            {
-            case TOUCH_STATE_RELEASE:
-                return bytes[5];
-                break;
-
-            case TOUCH_STATE_ALL_FIELDS:
-                return bytes[5];
-                break;
-
-            case TOUCH_STATE_SWIPE_LEFT:
-                return bytes[5];
-                break;
-
-            case TOUCH_STATE_SWIPE_RIGHT:
-                return bytes[5];
-                break;
-
-            default:
-                return bytes[6];
-                break;
-            }
-        }
-
-        int TxUltimateTouch::get_touch_state(int bytes[])
-        {
-            int state = bytes[4];
-
-            if (state == TOUCH_STATE_PRESS && bytes[5] != 0)
-            {
-                state = TOUCH_STATE_RELEASE;
-            }
-
-            if (state == TOUCH_STATE_RELEASE && bytes[5] == TOUCH_STATE_ALL_FIELDS)
-            {
-                state = TOUCH_STATE_ALL_FIELDS;
-            }
-
-            if (state == TOUCH_STATE_SWIPE)
-            {
-                if (bytes[5] == TOUCH_STATE_SWIPE_RIGHT)
-                {
-                    state = TOUCH_STATE_SWIPE_RIGHT;
-                }
-                else if (bytes[5] == TOUCH_STATE_SWIPE_LEFT)
-                {
-                    state = TOUCH_STATE_SWIPE_LEFT;
-                }
-            }
-
-            return state;
-        }
-
-        TouchPoint TxUltimateTouch::get_touch_point(int bytes[])
-        {
-            TouchPoint tp;
-
-            tp.x = get_x_touch_position(bytes);
-            tp.state = get_touch_state(bytes);
-
-            return tp;
-        }
-
-    } // namespace tx_ultimate_touch
-} // namespace esphome
+}  // namespace tx_ultimate_touch
+}  // namespace esphome
